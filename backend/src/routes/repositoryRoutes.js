@@ -7,6 +7,7 @@ import {
   getAnalyses,
   getAnalysisLanguages,
   getAnalysisContributors,
+  getAnalysisReadme,
 } from '../controllers/repositoryController.js';
 
 const router = Router();
@@ -30,5 +31,8 @@ router.get('/analyses/:id/languages', getAnalysisLanguages);
 
 // GET /api/analyses/:id/contributors — contributor stats only
 router.get('/analyses/:id/contributors', getAnalysisContributors);
+
+// GET /api/analyses/:id/readme — readme summary only
+router.get('/analyses/:id/readme', getAnalysisReadme);
 
 export default router;

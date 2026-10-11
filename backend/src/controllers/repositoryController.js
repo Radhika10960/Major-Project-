@@ -1,15 +1,26 @@
 import RepositoryAnalysis from '../models/RepositoryAnalysis.js';
 import { parseGitHubUrl, normalizeGitHubUrl } from '../utils/urlParser.js';
-import { fetchRepositoryMetadata } from '../services/githubService.js';
+import {
+  fetchRepositoryMetadata,
+  fetchRepositoryLanguages,
+  fetchContributors,
+  fetchRepositoryReadme,
+  fetchRepositoryContents,
+  fetchFileContent,
+  fetchCommitActivity,
+} from '../services/githubService.js';
+import { parseReadme } from '../utils/readmeParser.js';
+import {
+  identifyConfigFiles,
+  detectProjectType,
+} from '../utils/projectTypeDetector.js';
 
 /**
  * POST /api/repositories/analyze
  *
  * Accepts a GitHub repository URL, validates it, fetches metadata,
- * creates a new analysis record, and returns the analysis ID.
- *
- * In later phases this will kick off an async background job.
- * For now (Phase 2) it fetches metadata synchronously and saves it.
+ * language statistics, contributors, commit activity, README summary,
+ * config files, and project type, creates a new analysis record, and returns the analysis ID.
  */
 export async function analyzeRepository(req, res, next) {
   try {
@@ -59,25 +70,94 @@ export async function analyzeRepository(req, res, next) {
     analysis.startedAt = new Date();
     await analysis.save();
 
-    // Phase 2: Fetch metadata synchronously
-    // (Phase 5 will convert this to an async job)
+    // Phase 3: Inspect repository metadata, language breakdown, contributors, README, and architecture
+    // (Phase 5 will convert long-running jobs to an async queue)
     try {
-      const metadata = await fetchRepositoryMetadata(parsed.owner, parsed.repo);
-      analysis.metadata = metadata;
+      const [
+        metaResult,
+        languagesResult,
+        contributorsResult,
+        readmeResult,
+        contentsResult,
+        commitActivityResult,
+      ] = await Promise.allSettled([
+        fetchRepositoryMetadata(parsed.owner, parsed.repo),
+        fetchRepositoryLanguages(parsed.owner, parsed.repo),
+        fetchContributors(parsed.owner, parsed.repo),
+        fetchRepositoryReadme(parsed.owner, parsed.repo),
+        fetchRepositoryContents(parsed.owner, parsed.repo),
+        fetchCommitActivity(parsed.owner, parsed.repo),
+      ]);
 
-      // For now, mark as completed after metadata fetch
-      // Later phases will add language detection, cloning, etc.
-      // before marking complete
+      if (metaResult.status === 'rejected') {
+        throw metaResult.reason;
+      }
+
+      const metadata = metaResult.value;
+      const languages = languagesResult.status === 'fulfilled' ? languagesResult.value : [];
+      const contributors = contributorsResult.status === 'fulfilled' ? contributorsResult.value : [];
+      const commitActivity = commitActivityResult.status === 'fulfilled' ? commitActivityResult.value : [];
+      const readmeRaw = readmeResult.status === 'fulfilled' ? readmeResult.value : null;
+      const rootItems = contentsResult.status === 'fulfilled' ? contentsResult.value : [];
+
+      // Parse README if present
+      const readmeSummary = parseReadme(
+        readmeRaw?.rawContent,
+        readmeRaw?.filename || 'README.md'
+      );
+
+      // Detect configuration files
+      const configFiles = identifyConfigFiles(rootItems);
+      let packageJson = null;
+
+      if (configFiles.includes('package.json')) {
+        const pkgContent = await fetchFileContent(parsed.owner, parsed.repo, 'package.json');
+        if (pkgContent) {
+          try {
+            packageJson = JSON.parse(pkgContent);
+          } catch {
+            // Non-critical if package.json has parsing issues
+          }
+        }
+      }
+
+      // Infer project type and architecture
+      const { projectType, projectTypeConfidence } = detectProjectType({
+        configFiles,
+        packageJson,
+        primaryLanguage: metadata.language,
+        rootItemNames: rootItems.map((item) => item.name),
+        readmePurpose: readmeSummary.purpose || readmeSummary.technologies?.join(' '),
+      });
+
+      // Calculate file and line estimates
+      const totalBytes = languages.reduce((sum, l) => sum + (l.totalBytes || 0), 0);
+      const totalFilesEstimate = rootItems.length > 0 ? rootItems.length : (languages.length > 0 ? languages.length : 1);
+      const totalLinesEstimate = totalBytes > 0 ? Math.round(totalBytes / 35) : 0;
+
+      // Update analysis record
+      analysis.metadata = metadata;
+      analysis.languages = languages;
+      analysis.contributors = contributors;
+      analysis.contributorCount = contributors.length;
+      analysis.commitActivity = commitActivity;
+      analysis.readmeSummary = readmeSummary;
+      analysis.configFilesFound = configFiles;
+      analysis.projectType = projectType;
+      analysis.projectTypeConfidence = projectTypeConfidence;
+      analysis.totalFiles = totalFilesEstimate;
+      analysis.totalLines = totalLinesEstimate;
+
       analysis.status = 'completed';
       analysis.completedAt = new Date();
       analysis.durationMs = analysis.completedAt - analysis.startedAt;
       await analysis.save();
-    } catch (metaErr) {
-      // Record the failure but don't crash the request
+    } catch (analysisErr) {
+      // Record the failure
       analysis.status = 'failed';
       analysis.error = {
-        message: metaErr.message,
-        phase: 'metadata',
+        message: analysisErr.message,
+        phase: 'inspection',
         timestamp: new Date(),
       };
       analysis.completedAt = new Date();
@@ -90,8 +170,8 @@ export async function analyzeRepository(req, res, next) {
         data: {
           analysisId: analysis._id,
           status: analysis.status,
-          message: 'Analysis started but encountered an error during metadata retrieval',
-          error: metaErr.message,
+          message: 'Analysis started but encountered an error during repository inspection',
+          error: analysisErr.message,
         },
       });
     }
@@ -273,3 +353,44 @@ export async function getAnalysisContributors(req, res, next) {
     next(err);
   }
 }
+
+/**
+ * GET /api/analyses/:id/readme
+ *
+ * Returns the extracted README summary for a completed analysis.
+ */
+export async function getAnalysisReadme(req, res, next) {
+  try {
+    const { id } = req.params;
+
+    if (!id.match(/^[0-9a-fA-F]{24}$/)) {
+      return res.status(400).json({
+        success: false,
+        error: { message: 'Invalid analysis ID format' },
+      });
+    }
+
+    const analysis = await RepositoryAnalysis.findById(id).select(
+      'status fullName readmeSummary'
+    );
+
+    if (!analysis) {
+      return res.status(404).json({
+        success: false,
+        error: { message: 'Analysis not found' },
+      });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        status: analysis.status,
+        fullName: analysis.fullName,
+        readmeSummary: analysis.readmeSummary,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+

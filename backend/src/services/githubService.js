@@ -1,5 +1,6 @@
 import axios from 'axios';
 import config from '../config/env.js';
+import { getLanguageExtensions } from '../utils/languageExtensions.js';
 
 /**
  * GitHub REST API service.
@@ -127,10 +128,153 @@ export async function fetchContributors(owner, repo) {
       avatarUrl: c.avatar_url || null,
       profileUrl: c.html_url || null,
       contributions: c.contributions ?? 0,
+      commits: c.contributions ?? 0,
     }));
   } catch (err) {
     // Non-critical — return empty array and log
     console.warn(`[GitHub] Could not fetch contributors for ${owner}/${repo}:`, err.message);
+    return [];
+  }
+}
+
+/**
+ * Fetch language byte breakdown from GitHub API.
+ * Calculates byte counts, percentages, and standard extensions.
+ * @param {string} owner
+ * @param {string} repo
+ * @returns {Array<object>}
+ */
+export async function fetchRepositoryLanguages(owner, repo) {
+  try {
+    const { data } = await githubApi.get(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/languages`
+    );
+
+    if (!data || typeof data !== 'object') return [];
+
+    const totalBytes = Object.values(data).reduce((acc, bytes) => acc + (bytes || 0), 0);
+
+    return Object.entries(data).map(([language, bytes]) => ({
+      language,
+      totalBytes: bytes,
+      totalLines: 0,
+      fileCount: 0,
+      percentage: totalBytes > 0 ? Number(((bytes / totalBytes) * 100).toFixed(2)) : 0,
+      extensions: getLanguageExtensions(language),
+    }));
+  } catch (err) {
+    console.warn(`[GitHub] Could not fetch languages for ${owner}/${repo}:`, err.message);
+    return [];
+  }
+}
+
+/**
+ * Fetch raw README content and metadata.
+ * Returns null if no README exists or if request fails.
+ * @param {string} owner
+ * @param {string} repo
+ * @returns {object|null}
+ */
+export async function fetchRepositoryReadme(owner, repo) {
+  try {
+    const { data } = await githubApi.get(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/readme`
+    );
+
+    if (!data?.content) return null;
+
+    const rawContent = Buffer.from(data.content, 'base64').toString('utf-8');
+
+    return {
+      filename: data.name || 'README.md',
+      rawContent,
+      size: data.size || rawContent.length,
+      path: data.path || 'README.md',
+    };
+  } catch (err) {
+    if (err.response?.status !== 404) {
+      console.warn(`[GitHub] Could not fetch README for ${owner}/${repo}:`, err.message);
+    }
+    return null;
+  }
+}
+
+/**
+ * Fetch repository contents (directory list or file).
+ * Defaults to root directory ('').
+ * @param {string} owner
+ * @param {string} repo
+ * @param {string} [path='']
+ * @returns {Array<object>}
+ */
+export async function fetchRepositoryContents(owner, repo, path = '') {
+  try {
+    const endpoint = path
+      ? `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodeURIComponent(path)}`
+      : `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents`;
+
+    const { data } = await githubApi.get(endpoint);
+
+    if (Array.isArray(data)) {
+      return data.map((item) => ({
+        name: item.name,
+        path: item.path,
+        type: item.type, // 'file' | 'dir'
+        size: item.size || 0,
+      }));
+    }
+
+    return [];
+  } catch (err) {
+    console.warn(`[GitHub] Could not fetch contents for ${owner}/${repo} at '${path}':`, err.message);
+    return [];
+  }
+}
+
+/**
+ * Fetch and decode text file content from repository.
+ * @param {string} owner
+ * @param {string} repo
+ * @param {string} filePath
+ * @returns {string|null}
+ */
+export async function fetchFileContent(owner, repo, filePath) {
+  try {
+    const { data } = await githubApi.get(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/contents/${encodeURIComponent(filePath)}`
+    );
+
+    if (data?.content) {
+      return Buffer.from(data.content, 'base64').toString('utf-8');
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch weekly commit activity stats for the repository.
+ * @param {string} owner
+ * @param {string} repo
+ * @returns {Array<{ week: Date, commits: number }>}
+ */
+export async function fetchCommitActivity(owner, repo) {
+  try {
+    const { data } = await githubApi.get(
+      `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/stats/commit_activity`
+    );
+
+    if (Array.isArray(data)) {
+      return data.slice(-26).map((item) => ({
+        week: new Date(item.week * 1000),
+        commits: item.total ?? 0,
+      }));
+    }
+
+    return [];
+  } catch (err) {
+    console.warn(`[GitHub] Could not fetch commit activity for ${owner}/${repo}:`, err.message);
     return [];
   }
 }
