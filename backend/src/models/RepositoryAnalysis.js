@@ -98,6 +98,42 @@ const repoMetadataSchema = new Schema(
 );
 
 /**
+ * Quality check item sub-schema.
+ */
+const qualityCheckSchema = new Schema(
+  {
+    id: { type: String, required: true },
+    name: { type: String, required: true },
+    weight: { type: Number, required: true },
+    passed: { type: Boolean, required: true },
+    pointsEarned: { type: Number, default: 0 },
+    evidence: { type: String, default: null },
+    fix: { type: String, default: null },
+  },
+  { _id: false }
+);
+
+/**
+ * Quality report sub-schema.
+ */
+const qualityReportSchema = new Schema(
+  {
+    score: { type: Number, default: 0 },
+    maxScore: { type: Number, default: 10 },
+    grade: { type: String, default: 'N/A' },
+    passedCount: { type: Number, default: 0 },
+    totalCount: { type: Number, default: 0 },
+    licenseInfo: {
+      exists: { type: Boolean, default: false },
+      name: { type: String, default: null },
+      description: { type: String, default: null },
+    },
+    checks: [qualityCheckSchema],
+  },
+  { _id: false }
+);
+
+/**
  * Main RepositoryAnalysis schema.
  */
 const repositoryAnalysisSchema = new Schema(
@@ -157,6 +193,11 @@ const repositoryAnalysisSchema = new Schema(
 
     readmeSummary: {
       type: readmeSummarySchema,
+      default: null,
+    },
+
+    quality: {
+      type: qualityReportSchema,
       default: null,
     },
 
