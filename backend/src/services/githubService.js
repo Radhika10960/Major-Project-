@@ -295,3 +295,13 @@ export async function getRateLimit() {
     return null;
   }
 }
+async function fetchRepositoryTree(owner, repo, branch) {
+  // Use the same request helper/headers (token, etc.) as your other fetch functions
+  const data = await githubGet(
+    `/repos/${owner}/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`
+  );
+  return {
+    entries: data.tree.map(({ path, type, size }) => ({ path, type, size })),
+    truncated: data.truncated === true,
+  };
+}
