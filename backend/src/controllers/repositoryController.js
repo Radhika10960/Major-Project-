@@ -14,6 +14,7 @@ import {
   identifyConfigFiles,
   detectProjectType,
 } from '../utils/projectTypeDetector.js';
+import { calculateQualityScore } from '../services/qualityService.js';
 
 /**
  * POST /api/repositories/analyze
@@ -135,6 +136,16 @@ export async function analyzeRepository(req, res, next) {
       const totalFilesEstimate = rootItems.length > 0 ? rootItems.length : (languages.length > 0 ? languages.length : 1);
       const totalLinesEstimate = totalBytes > 0 ? Math.round(totalBytes / 35) : 0;
 
+      // Compute deterministic repository quality scorecard
+      const quality = calculateQualityScore({
+        metadata,
+        readmeSummary,
+        configFilesFound: configFiles,
+        rootItems,
+        rootItemNames: rootItems.map((item) => item.name),
+        packageJson,
+      });
+
       // Update analysis record
       analysis.metadata = metadata;
       analysis.languages = languages;
@@ -142,6 +153,7 @@ export async function analyzeRepository(req, res, next) {
       analysis.contributorCount = contributors.length;
       analysis.commitActivity = commitActivity;
       analysis.readmeSummary = readmeSummary;
+      analysis.quality = quality;
       analysis.configFilesFound = configFiles;
       analysis.projectType = projectType;
       analysis.projectTypeConfidence = projectTypeConfidence;

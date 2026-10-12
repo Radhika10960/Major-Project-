@@ -22,6 +22,7 @@ import ProjectArchitectureCard from '../components/ProjectArchitectureCard';
 import ContributorList from '../components/ContributorList';
 import ReadmeViewer from '../components/ReadmeViewer';
 import CommitActivityChart from '../components/CommitActivityChart';
+import QualityScoreCard from '../components/QualityScoreCard';
 
 export default function AnalysisDetail() {
   const { id } = useParams();
@@ -234,6 +235,11 @@ export default function AnalysisDetail() {
         </div>
       </div>
 
+      {/* Repository Quality Scorecard */}
+      {analysis.quality && (
+        <QualityScoreCard quality={analysis.quality} />
+      )}
+
       {/* Main Analysis Sections Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-start">
         {/* Left Column: Code & Architecture */}
@@ -248,7 +254,10 @@ export default function AnalysisDetail() {
 
           <LanguageBar languages={analysis.languages} />
 
-          <CommitActivityChart commitActivity={analysis.commitActivity} />
+          <CommitActivityChart
+            commitActivity={analysis.commitActivity}
+            lastPushedAt={analysis.metadata?.pushedAt}
+          />
         </div>
 
         {/* Right Column: README & Contributors */}
